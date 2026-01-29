@@ -1,99 +1,93 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { App, Plugin, Notice } from 'obsidian';
+import { DEFAULT_SETTINGS, ClickControlSettings, ClickControlSettingTab } from "./settings";
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class ClickControlPlugin extends Plugin {
+	settings: ClickControlSettings;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		this.addSettingTab(new ClickControlSettingTab(this.app, this));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
+		// Intercept click events in the document using capture phase
 		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
+			const target = evt.target as HTMLElement;
+			const navFileTitle = target.closest('.nav-file-title');
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+			if (navFileTitle) {
+				const path = navFileTitle.getAttribute('data-path') || this.getFilePathFromElement(navFileTitle as HTMLElement);
 
+				if (!path) return;
+
+				const extension = path.split('.').pop()?.toLowerCase() || '';
+				if (!extension) return;
+
+				const unsupportedExts = this.settings.unsupportedExtensions
+					.split(',')
+					.map((e: string) => e.trim().toLowerCase())
+					.filter((e: string) => e !== "");
+
+				const isUnsupported = unsupportedExts.includes(extension);
+				const isUnrecognized = this.settings.interceptUnrecognized && !((this.app as any).viewRegistry.getTypeByExtension(extension));
+
+				if (isUnsupported || isUnrecognized) {
+					// Always intercept default behavior for these files
+					evt.preventDefault();
+					evt.stopPropagation();
+
+					// Only act on the first click of a potential double-click to avoid double execution
+					if (evt.detail === 1) {
+						const isCtrl = evt.ctrlKey || evt.metaKey;
+						const isShift = evt.shiftKey;
+
+						if (isShift) {
+							// Shift + Click: Show in folder
+							new Notice("📁 正在打开所在文件夹...");
+							(this.app as any).showInFolder(path);
+						} else if (isCtrl) {
+							// Ctrl + Click: Open with default app
+							new Notice("🚀 正在通过系统程序打开...");
+							(this.app as any).openWithDefaultApp(path);
+						} else {
+							// Regular Click: Instruction Hint
+							new Notice(`💡 该文件受限: ${extension.toUpperCase()}\n• Shift + 单击: 定位文件夹\n• Ctrl + 单击: 强制打开`, 4000);
+						}
+					}
+				}
+			}
+		}, true); // Use capture phase
+	}
+
+	/**
+	 * Tries to find the file path associated with a DOM element in the file explorer
+	 */
+	private getFilePathFromElement(el: HTMLElement): string | null {
+		const navFile = el.closest('.nav-file');
+		if (!navFile) return null;
+
+		const explorerLeaves = this.app.workspace.getLeavesOfType('file-explorer');
+		for (const leaf of explorerLeaves) {
+			const view = leaf.view as any;
+			if (view.fileItems) {
+				for (const path in view.fileItems) {
+					const item = view.fileItems[path];
+					if (item.titleEl === el || item.el === navFile) {
+						return path;
+					}
+				}
+			}
+		}
+		return null;
 	}
 
 	onunload() {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<ClickControlSettings>);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
